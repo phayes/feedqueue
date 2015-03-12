@@ -1,0 +1,7 @@
+name = FeedQueue
+description = Populate a nodequeue from a feed
+core = 7.x
+package = Nodequeue
+version = 7.x-1.x
+project = feedqueue
+dependencies[] = nodequeue

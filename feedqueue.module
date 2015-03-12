@@ -1,0 +1,182 @@
+<?php
+
+/**
+ * Implements hook_ctools_plugin_type().
+ */
+function feedqueue_ctools_plugin_type() {
+  $item = array();
+  $item['feedqueue'] = array(
+    "module" => "feedqueue",
+    "plugin module" => "feedqueue",
+    "plugin type" => "feedqueue",
+  );
+  return $item;
+}
+
+/**
+ * Implements hook_ctools_plugin_directory().
+ */
+function feedqueue_ctools_plugin_directory($module, $plugin) {
+  if ($plugin == 'feedqueue') {
+    return 'plugins/' . $plugin;
+  }
+}
+
+/**
+ * Implements hook_form_alter
+ * 
+ * Alters nodequeue modification form to let them be managed via feedqueue
+ */
+function feedqueue_form_alter(&$form, &$form_state, $form_id) {
+  if (strrpos($form_id, 'nodequeue_arrange_subqueue_form') === 0) {
+    $queue_name = $form['nodes']['#queue']['name'];
+    $settings = variable_get('feedqueue_' . $queue_name, array());
+
+    // Get type option
+    $type_options = array();
+    foreach (feedqueue_feed_types() as $id => $type) {
+      $type_options[$id] = $type['title'];
+    }
+
+    $additions = array(
+      'feedqueue_enabled' => array(
+        '#type' => 'checkbox', 
+        '#title' => 'Manage using feed',
+        '#default_value' => isset($settings['enabled']) ? $settings['enabled'] : FALSE, 
+      ),
+      'feedqueue_type' => array(
+        '#type' => 'select', 
+        '#title' => 'Feed Type',
+        '#options' => $type_options, 
+        '#default_value' => isset($settings['type']) ? $settings['type'] : '', 
+        '#states' => array(
+          'invisible' => array(':input[name="feedqueue_enabled"]' => array('checked' => FALSE)),
+        ), 
+      ), 
+      'feedqueue_url' => array(
+        '#type' => 'textfield', 
+        '#title' => 'Feed URL',
+        '#default_value' => isset($settings['url']) ? $settings['url'] : '',
+        '#states' => array(
+          'invisible' => array(':input[name="feedqueue_enabled"]' => array('checked' => FALSE)),
+        ), 
+      ),
+      'feedqueue_limit' => array(
+        '#type' => 'textfield', 
+        '#title' => 'Limit Number of Items',
+        '#default_value' => isset($settings['limit']) ? $settings['limit'] : '',
+        '#states' => array(
+          'invisible' => array(':input[name="feedqueue_enabled"]' => array('checked' => FALSE)),
+        ),
+      ),
+    );
+
+    if (module_exists('token')) {
+      $additions['token_help'] = array(
+        '#title' => t('Token Replacement patterns'),
+        '#type' => 'fieldset',
+        '#states' => array(
+          'invisible' => array(':input[name="feedqueue_enabled"]' => array('checked' => FALSE)),
+        ),
+        'help' => array(
+          '#theme' => 'token_tree',
+        ), 
+      );
+    }
+    $form = array_merge($additions, $form);
+
+    // Modify existing form items
+    $form['nodes']['#states']['invisible'] = array(':input[name="feedqueue_enabled"]' => array('checked' => TRUE));
+    $form['add']['#states']['invisible'] = array(':input[name="feedqueue_enabled"]' => array('checked' => TRUE));
+    $form['actions']['reverse']['#states']['invisible'] = array(':input[name="feedqueue_enabled"]' => array('checked' => TRUE));
+    $form['actions']['shuffle']['#states']['invisible'] = array(':input[name="feedqueue_enabled"]' => array('checked' => TRUE));
+    $form['actions']['clear']['#states']['invisible'] = array(':input[name="feedqueue_enabled"]' => array('checked' => TRUE));
+    $form['actions']['submit']['#disabled'] = FALSE;
+    $form['actions']['submit']['#submit'][] = 'feedqueue_arrange_subqueue_form_submit';
+  }
+}
+
+/**
+ * Additional feedqueue submit handler for modified nodequeue form
+ */
+function feedqueue_arrange_subqueue_form_submit($form, &$form_state) {
+  $queue_name = $form['nodes']['#queue']['name'];
+
+  $settings = array(
+    'enabled' => $form_state['values']['feedqueue_enabled'],
+    'type' => $form_state['values']['feedqueue_type'], 
+    'url' => $form_state['values']['feedqueue_url'], 
+    'limit' => $form_state['values']['feedqueue_limit']
+  );
+
+  if ($settings['enabled']) {
+    variable_set('feedqueue_' . $queue_name, $settings);
+  }
+  else {
+    variable_del('feedqueue_' . $queue_name);
+  }
+
+  feedqueue_process_feeds();
+}
+
+/**
+ * Get all feedqueue feed types
+ */
+function feedqueue_feed_types() {
+  ctools_include('plugins');
+  return ctools_get_plugins('feedqueue', 'feedqueue');
+}
+
+/**
+ * Processes all feeds
+ * 
+ * This will populate all feedqueue managed nodequeues with data from the feeds
+ */
+function feedqueue_process_feeds() {
+  include_once DRUPAL_ROOT . '/' . drupal_get_path('module', 'nodequeue') . '/includes/nodequeue.admin.inc';
+
+  $query = db_select('nodequeue_queue', 'nq')->fields('nq', array('name'));
+  $queues = nodequeue_load_queues(nodequeue_get_all_qids());
+  $types = feedqueue_feed_types();
+  foreach ($queues as $queue) {
+    if ($settings = variable_get('feedqueue_' . $queue->name, FALSE)) {
+      if ($settings['enabled']) {
+        $callback = $types[$settings['type']]['callback'];
+        if ($callback) {
+          $url = token_replace($settings['url']);
+          $nids = $callback($url);
+          if (empty($nids)) { 
+            $nids = array();
+          }
+
+          if ($settings['limit'] && $settings['limit'] < count($nids)) {
+            $nids = array_slice($nids, 0, intval($settings['limit']));
+          }
+
+          $nodes = array();
+          foreach ($nids as $nid) {
+            $nodes[]['nid'] = $nid;
+          }
+
+          $subqueues = nodequeue_load_subqueues_by_queue(array($queue->qid));
+          foreach ($subqueues as $subqueue) {
+            nodequeue_save_subqueue_order($nodes, $queue->qid, $subqueue->sqid);
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_cron
+ * 
+ * Processes all feeds on cron run
+ */
+function feedqueue_cron() {
+  feedqueue_process_feeds();
+}
+
+
+
+
