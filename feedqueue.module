@@ -135,7 +135,6 @@ function feedqueue_feed_types() {
 function feedqueue_process_feeds() {
   include_once DRUPAL_ROOT . '/' . drupal_get_path('module', 'nodequeue') . '/includes/nodequeue.admin.inc';
 
-  $query = db_select('nodequeue_queue', 'nq')->fields('nq', array('name'));
   $queues = nodequeue_load_queues(nodequeue_get_all_qids());
   $types = feedqueue_feed_types();
   foreach ($queues as $queue) {
@@ -143,7 +142,9 @@ function feedqueue_process_feeds() {
       if ($settings['enabled']) {
         $callback = $types[$settings['type']]['callback'];
         if ($callback) {
-          $url = token_replace($settings['url']);
+          if (module_exists('token')) {
+            $url = token_replace($settings['url']);
+          }
           $nids = $callback($url);
           if (empty($nids)) { 
             $nids = array();
